@@ -1,0 +1,123 @@
+import { type ApprovalModeName } from '../types.js';
+
+export interface QwenArgsInput {
+  /** UUID of the Qwen session to create or continue. */
+  qwenSessionId: string;
+  resume: boolean;
+  approvalMode: ApprovalModeName;
+  maxWallTime: string;
+  model?: string;
+  authType?: string;
+  appendSystemPrompt?: string;
+}
+
+/**
+ * Build the Qwen Code command line for one headless run. The prompt is not
+ * part of it: it goes to stdin. `--model` is added at most once, because
+ * Qwen Code 0.28.0 crashes when it is given twice.
+ */
+export function buildQwenArgs(input: QwenArgsInput): string[] {
+  const args = ['--output-format', 'json'];
+  if (input.authType) args.push('--auth-type', input.authType);
+  if (input.model) args.push('--model', input.model);
+  args.push('--approval-mode', input.approvalMode);
+  args.push('--max-wall-time', input.maxWallTime);
+  args.push(input.resume ? '--resume' : '--session-id', input.qwenSessionId);
+  if (input.appendSystemPrompt) {
+    args.push('--append-system-prompt', input.appendSystemPrompt);
+  }
+  return args;
+}
+
+export interface QwenOutput {
+  /** False when stdout was not the expected JSON event array. */
+  parsed: boolean;
+  /** Final assistant text, or raw stdout when parsing failed. */
+  text: string;
+  isError: boolean;
+  errorMessage?: string;
+  sessionId?: string;
+  model?: string;
+  permissionMode?: string;
+  durationMs?: number;
+  numTurns?: number;
+  usage?: Record<string, unknown>;
+}
+
+type Event = Record<string, unknown>;
+
+const isRecord = (v: unknown): v is Event =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+const str = (v: unknown): string | undefined =>
+  typeof v === 'string' ? v : undefined;
+const num = (v: unknown): number | undefined =>
+  typeof v === 'number' ? v : undefined;
+
+function assistantText(event: Event): string {
+  const message = isRecord(event.message) ? event.message : {};
+  const content = Array.isArray(message.content) ? message.content : [];
+  return content
+    .filter((block) => isRecord(block) && block.type === 'text')
+    .map((block) => str((block as Event).text) ?? '')
+    .join('');
+}
+
+/**
+ * Parse the output of `qwen --output-format json`: one JSON array of events
+ * (`system`/init, `assistant` messages, and a final `result`). Anything else
+ * is returned as raw text.
+ */
+export function parseQwenOutput(stdout: string): QwenOutput {
+  const raw = stdout.trim();
+  let events: Event[];
+  try {
+    const data: unknown = JSON.parse(raw);
+    if (!Array.isArray(data)) throw new Error('not an event array');
+    events = data.filter(isRecord);
+  } catch {
+    return { parsed: false, text: raw, isError: false };
+  }
+
+  const init = events.find((e) => e.type === 'system' && e.subtype === 'init');
+  const result = events.findLast((e) => e.type === 'result');
+  const lastAssistant = events
+    .filter((e) => e.type === 'assistant')
+    .map(assistantText)
+    .findLast((text) => text.trim() !== '');
+
+  const error = result && isRecord(result.error) ? result.error : undefined;
+
+  return {
+    parsed: true,
+    text: str(result?.result) ?? lastAssistant ?? '',
+    isError: result?.is_error === true,
+    errorMessage: str(error?.message),
+    sessionId: str(result?.session_id) ?? str(init?.session_id),
+    model: str(init?.model),
+    permissionMode: str(init?.permission_mode),
+    durationMs: num(result?.duration_ms),
+    numTurns: num(result?.num_turns),
+    usage: result && isRecord(result.usage) ? result.usage : undefined,
+  };
+}
+
+/** Remove secret values from text before it is returned or logged. */
+export function scrub(
+  text: string,
+  secrets: Array<string | undefined>
+): string {
+  let clean = text;
+  for (const secret of secrets) {
+    if (secret) clean = clean.split(secret).join('[REDACTED]');
+  }
+  return clean;
+}
+
+/** The last `max` characters of a text, on whole lines where possible. */
+export function tail(text: string, max = 1500): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= max) return trimmed;
+  const cut = trimmed.slice(-max);
+  const newline = cut.indexOf('\n');
+  return `…${newline >= 0 && newline < 200 ? cut.slice(newline + 1) : cut}`;
+}
