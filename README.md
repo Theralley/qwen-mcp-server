@@ -23,7 +23,7 @@ does the same for the OpenAI Codex CLI.
 ## Install
 
 ```sh
-git clone <this repository> qwen-mcp-server
+git clone https://github.com/Theralley/qwen-mcp-server.git
 cd qwen-mcp-server
 npm install        # also builds dist/
 ```
