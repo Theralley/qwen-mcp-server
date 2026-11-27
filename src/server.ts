@@ -13,7 +13,9 @@ import {
   TOOLS,
 } from './types.js';
 import { handleError } from './errors.js';
-import { toolDefinitions } from './tools/definitions.js';
+import { buildToolDefinitions } from './tools/definitions.js';
+import { DEFAULT_APPROVAL_MODE, loadConfig } from './config.js';
+import { killAll } from './utils/command.js';
 import { toolHandlers } from './tools/handlers.js';
 
 export class QwenMcpServer {
@@ -31,7 +33,13 @@ export class QwenMcpServer {
 
   private setupHandlers(): void {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      return { tools: toolDefinitions };
+      let mode = DEFAULT_APPROVAL_MODE;
+      try {
+        mode = loadConfig().approvalMode;
+      } catch {
+        // A configuration error is reported by the tool call itself.
+      }
+      return { tools: buildToolDefinitions(mode) };
     });
 
     this.server.setRequestHandler(
@@ -82,6 +90,15 @@ export class QwenMcpServer {
 
   async start(): Promise<void> {
     const transport = new StdioServerTransport();
+    // When the client goes away (it closes our stdin), stop any Qwen run it started
+    // instead of waiting for it. The SDK's stdio transport does not watch for this.
+    const shutdown = () => {
+      killAll();
+      process.exit(0);
+    };
+    this.server.onclose = shutdown;
+    process.stdin.once('end', shutdown);
+    process.stdin.once('close', shutdown);
     await this.server.connect(transport);
     console.error(`${this.config.name} started successfully`);
   }

@@ -91,6 +91,31 @@ describe('qwen tool', () => {
       expect(flagValue(second, '--append-system-prompt')).toBe('Be brief.');
     });
 
+    test('plan mode refuses allowedTools other than shell commands, before running', async () => {
+      const error = await handler
+        .execute({
+          prompt: 'a',
+          approvalMode: 'plan',
+          allowedTools: ['write_file'],
+        })
+        .catch((e) => e);
+      expect(error.message).toMatch(/may only list shell commands/);
+      expect(error.message).toMatch(/write_file/);
+      expect(fake.calls()).toHaveLength(0);
+      // shell commands are fine in plan, any tool is fine in other modes
+      await handler.execute({
+        prompt: 'b',
+        approvalMode: 'plan',
+        allowedTools: ['run_shell_command(npm test)'],
+      });
+      await handler.execute({
+        prompt: 'c',
+        approvalMode: 'auto-edit',
+        allowedTools: ['write_file'],
+      });
+      expect(fake.calls()).toHaveLength(2);
+    });
+
     test('rejects invalid arguments and configuration before running', async () => {
       await expect(handler.execute({ prompt: '' })).rejects.toThrow(
         /Validation failed/
@@ -159,6 +184,25 @@ describe('qwen tool', () => {
       expect(error).toBeInstanceOf(Error);
       expect(error.message).toContain('API Error: 401 for key [REDACTED]');
       expect(error.message).toContain('auth failed with [REDACTED]');
+      expect(error.message).not.toContain(SECRET);
+    });
+
+    test('a short key is scrubbed too', async () => {
+      const keyFile = path.join(fake.dir, 'short.key');
+      writeFileSync(keyFile, 'k3y\n', { mode: 0o600 });
+      process.env.QWEN_MCP_API_KEY_FILE = keyFile;
+      process.env.FAKE_QWEN_MODE = 'api-error';
+      const error = await handler.execute({ prompt: 'hello' }).catch((e) => e);
+      expect(error.message).toContain('401 for key [REDACTED]');
+      expect(error.message).not.toContain('k3y');
+    });
+
+    test('a key the server inherited is scrubbed as well', async () => {
+      process.env.OPENAI_API_KEY = SECRET;
+      process.env.FAKE_QWEN_MODE = 'api-error';
+      const error = await handler.execute({ prompt: 'hello' }).catch((e) => e);
+
+      expect(error.message).toContain('[REDACTED]');
       expect(error.message).not.toContain(SECRET);
     });
 
@@ -278,6 +322,16 @@ describe('qwen tool', () => {
       expect(flagValue(b, '--session-id')).not.toBe(
         flagValue(a, '--session-id')
       );
+    });
+
+    test('a failed reset keeps the old session', async () => {
+      await handler.execute({ prompt: 'one', sessionId: 's1' });
+      const before = storage.get('s1')?.qwenSessionId;
+      process.env.FAKE_QWEN_MODE = 'exit1';
+      await expect(
+        handler.execute({ prompt: 'two', sessionId: 's1', resetSession: true })
+      ).rejects.toThrow();
+      expect(storage.get('s1')?.qwenSessionId).toBe(before);
     });
 
     test('a failed resume is reported and does not start a fresh session', async () => {

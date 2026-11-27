@@ -8,6 +8,7 @@ import {
   scrub,
   tail,
 } from '../utils/qwen';
+import { buildToolDefinitions } from '../tools/definitions';
 import { createFakeQwen } from './fake-qwen';
 
 describe('loadConfig', () => {
@@ -74,35 +75,37 @@ test('buildQwenArgs uses --session-id for a new session and --resume after', () 
   expect(resumed.filter((arg) => arg === '--model')).toHaveLength(1);
 });
 
-test('plan mode may run read-only git and gh pr commands, and nothing else by default', () => {
+test('plan mode may run read-only git commands, and nothing else by default', () => {
   const base = { qwenSessionId: 'abc', maxWallTime: '15m', resume: false };
   const allowed = (args: string[]) =>
     args.flatMap((arg, i) => (arg === '--allowed-tools' ? [args[i + 1]] : []));
+  const mode = (args: string[]) => args[args.indexOf('--approval-mode') + 1];
   const plan = allowed(buildQwenArgs({ ...base, approvalMode: 'plan' }));
   expect(plan).toContain('run_shell_command(git diff)');
-  expect(plan).toContain('run_shell_command(gh pr diff)');
-  expect(plan.some((t) => /git (push|commit|checkout|reset)/.test(t))).toBe(
-    false
-  );
+  // Qwen Code cannot classify gh as read-only and refuses it in plan mode
+  expect(plan.some((t) => t.includes('gh '))).toBe(false);
+  // git branch can create and delete branches
+  expect(
+    plan.some((t) => /git (push|commit|checkout|reset|branch)/.test(t))
+  ).toBe(false);
   expect(allowed(buildQwenArgs({ ...base, approvalMode: 'yolo' }))).toEqual([]);
-  const extra = allowed(
-    buildQwenArgs({
-      ...base,
-      approvalMode: 'plan',
-      allowedTools: ['run_shell_command(npm test)'],
-    })
-  );
-  expect(extra).toContain('run_shell_command(npm test)');
-  expect(extra).toContain('run_shell_command(git log)');
-  // plan mode would refuse the extra command, so the run uses default mode
+  // allowedTools never changes the mode: plan stays plan, with its read-only check
   const withExtra = buildQwenArgs({
     ...base,
     approvalMode: 'plan',
     allowedTools: ['run_shell_command(npm test)'],
   });
-  expect(withExtra[withExtra.indexOf('--approval-mode') + 1]).toBe('default');
-  const planOnly = buildQwenArgs({ ...base, approvalMode: 'plan' });
-  expect(planOnly[planOnly.indexOf('--approval-mode') + 1]).toBe('plan');
+  expect(mode(withExtra)).toBe('plan');
+  expect(allowed(withExtra)).toContain('run_shell_command(npm test)');
+  expect(allowed(withExtra)).toContain('run_shell_command(git log)');
+  // in default mode only the caller's tools are pre-approved, not the git prefixes
+  const dflt = buildQwenArgs({
+    ...base,
+    approvalMode: 'default',
+    allowedTools: ['run_shell_command(npm test)'],
+  });
+  expect(mode(dflt)).toBe('default');
+  expect(allowed(dflt)).toEqual(['run_shell_command(npm test)']);
 });
 
 test('plan mode tells the model not to prefix git commands', () => {
@@ -266,4 +269,18 @@ describe('runCommand', () => {
     expect(result.aborted).toBe(true);
     expect(result.timedOut).toBe(false);
   });
+});
+
+test('the tool description names the configured default approval mode', () => {
+  const describe = (mode: 'plan' | 'yolo') => {
+    const [qwen] = buildToolDefinitions(mode);
+    const props = qwen.inputSchema.properties as Record<
+      string,
+      { description: string }
+    >;
+    return `${qwen.description} ${props.approvalMode.description}`;
+  };
+  expect(describe('plan')).toContain('"plan" (read-only');
+  expect(describe('yolo')).toContain('"yolo" (EVERYTHING is approved');
+  expect(describe('yolo')).not.toContain('"plan" (read-only');
 });

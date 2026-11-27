@@ -44,3 +44,6 @@ temp/
 
 # Jest cache
 .jest/
+
+# Local agent state (oh-my-claudecode)
+.omc/

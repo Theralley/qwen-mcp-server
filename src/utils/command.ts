@@ -34,6 +34,8 @@ export interface RunResult {
   code: number | null;
   timedOut: boolean;
   aborted: boolean;
+  /** True when stdout or stderr passed MAX_BUFFER_SIZE and was cut off. */
+  overflow: boolean;
 }
 
 // Children still running, so they can be stopped when the server exits.
@@ -49,9 +51,22 @@ function killTree(pid: number, signal: NodeJS.Signals): void {
   }
 }
 
-process.on('exit', () => {
+/** Kill every child still running. Called on exit and on the signals below. */
+export function killAll(): void {
   for (const pid of running) killTree(pid, 'SIGKILL');
-});
+}
+
+process.on('exit', killAll);
+// A default SIGTERM/SIGINT/SIGHUP ends Node without running 'exit' handlers, and the
+// children lead their own process groups, so they would outlive the server.
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+  process.on(signal, () => {
+    killAll();
+    process.exit(
+      128 + ({ SIGHUP: 1, SIGINT: 2, SIGTERM: 15 } as const)[signal]
+    );
+  });
+}
 
 /**
  * Run a command to completion. Resolves with the exit code and captured
@@ -79,6 +94,7 @@ export function runCommand(
     let stderr = '';
     let timedOut = false;
     let aborted = false;
+    let overflow = false;
     let timer: NodeJS.Timeout | undefined;
     let killTimer: NodeJS.Timeout | undefined;
 
@@ -105,10 +121,13 @@ export function runCommand(
       else options.signal?.addEventListener('abort', onAbort, { once: true });
     });
 
-    const append = (current: string, data: Buffer): string =>
-      current.length >= MAX_BUFFER_SIZE
+    const append = (current: string, data: Buffer): string => {
+      const text = data.toString();
+      if (current.length + text.length > MAX_BUFFER_SIZE) overflow = true;
+      return current.length >= MAX_BUFFER_SIZE
         ? current
-        : current + data.toString().slice(0, MAX_BUFFER_SIZE - current.length);
+        : current + text.slice(0, MAX_BUFFER_SIZE - current.length);
+    };
     child.stdout.on('data', (data: Buffer) => {
       stdout = append(stdout, data);
     });
@@ -123,6 +142,9 @@ export function runCommand(
     const cleanup = () => {
       if (child.pid !== undefined) running.delete(child.pid);
       clearTimeout(timer);
+      // If a stop was under way, the leader may be gone while helpers in its group
+      // ignored SIGTERM: kill the rest of the group now instead of dropping the SIGKILL.
+      if (killTimer && child.pid !== undefined) killTree(child.pid, 'SIGKILL');
       clearTimeout(killTimer);
       options.signal?.removeEventListener('abort', onAbort);
     };
@@ -133,7 +155,7 @@ export function runCommand(
     });
     child.on('close', (code) => {
       cleanup();
-      resolve({ stdout, stderr, code, timedOut, aborted });
+      resolve({ stdout, stderr, code, timedOut, aborted, overflow });
     });
   });
 }

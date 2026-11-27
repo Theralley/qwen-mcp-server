@@ -14,9 +14,10 @@ export interface QwenArgsInput {
 }
 
 /**
- * Read-only commands a `plan` run may still execute. Plan mode otherwise has no shell, so
- * Qwen could not read a branch or a PR and the caller had to copy the code into the
- * working directory first (seen 2026-11-27). Prefix matches, as Qwen Code checks them.
+ * Read-only git commands a `plan` run may execute, so Qwen can read a branch itself
+ * instead of the caller copying the code in first. Prefix matches, as Qwen Code checks
+ * them. Plan mode still runs its own read-only check on top: `gh` is not on the list
+ * because Qwen Code 0.28 cannot classify it and refuses it in plan mode.
  */
 export const PLAN_READ_ONLY_COMMANDS = [
   'git log',
@@ -25,50 +26,44 @@ export const PLAN_READ_ONLY_COMMANDS = [
   'git status',
   'git blame',
   'git ls-files',
-  'git branch',
-  'gh pr view',
-  'gh pr diff',
 ] as const;
+
+// The allow-list matches the start of the command, so `git -C <dir> log` is refused
+// while `git log` is allowed. Tell the model; widening the list to `git -C` would
+// also allow `git -C <dir> push`.
+export const PLAN_SHELL_HINT =
+  'Shell commands: run git from the working directory exactly as `git log`, ' +
+  '`git diff`, `git show` and so on. Never use `git -C <dir>`, `cd <dir> &&` or other ' +
+  'prefixes: only commands that start with an allowed read-only command are permitted.';
 
 /**
  * Build the Qwen Code command line for one headless run. The prompt is not
  * part of it: it goes to stdin. `--model` is added at most once, because
  * Qwen Code 0.28.0 crashes when it is given twice.
+ *
+ * The approval mode is passed through unchanged. Plan mode keeps its own read-only
+ * check, so a caller's `allowedTools` cannot widen it; a call that needs other
+ * commands must ask for another mode explicitly. (An earlier version switched
+ * plan + allowedTools to `default`, where the git prefixes above were no longer
+ * checked for being read-only: `git branch -D` and `git log --output=FILE` ran.)
  */
-// The allow-list matches the start of the command, so `git -C <dir> log` is refused
-// while `git log` is allowed. Tell the model; widening the list to `git -C` would
-// also allow `git -C <dir> push`.
-export const PLAN_SHELL_HINT =
-  'Shell commands: run git and gh from the working directory exactly as `git log`, ' +
-  '`git diff`, `gh pr view` and so on. Never use `git -C <dir>`, `cd <dir> &&` or other ' +
-  'prefixes: only commands that start with an allowed read-only command are permitted.';
-
 export function buildQwenArgs(input: QwenArgsInput): string[] {
   const args = ['--output-format', 'json'];
   if (input.authType) args.push('--auth-type', input.authType);
   if (input.model) args.push('--model', input.model);
-  // Plan mode refuses every command Qwen Code cannot classify as read-only, whatever the
-  // allow-list says (tested 2026-11-27: `date` with allowedTools was refused). A plan
-  // call with extra tools therefore runs in `default` mode: nobody can approve an edit
-  // in a headless run, so it still cannot change files, and the shell is limited to the
-  // read-only commands below plus the caller's extra tools.
-  const extra = input.allowedTools ?? [];
-  const mode =
-    input.approvalMode === 'plan' && extra.length > 0
-      ? 'default'
-      : input.approvalMode;
-  args.push('--approval-mode', mode);
+  const plan = input.approvalMode === 'plan';
+  args.push('--approval-mode', input.approvalMode);
   const allowed = [
-    ...(input.approvalMode === 'plan'
+    ...(plan
       ? PLAN_READ_ONLY_COMMANDS.map((c) => `run_shell_command(${c})`)
       : []),
-    ...extra,
+    ...(input.allowedTools ?? []),
   ];
   for (const tool of allowed) args.push('--allowed-tools', tool);
   args.push('--max-wall-time', input.maxWallTime);
   args.push(input.resume ? '--resume' : '--session-id', input.qwenSessionId);
   const system = [
-    input.approvalMode === 'plan' ? PLAN_SHELL_HINT : '',
+    plan ? PLAN_SHELL_HINT : '',
     input.appendSystemPrompt ?? '',
   ].filter(Boolean);
   if (system.length) args.push('--append-system-prompt', system.join('\n\n'));

@@ -24,6 +24,44 @@ import {
 import { runCommand, type RunResult } from '../utils/command.js';
 import { buildQwenArgs, parseQwenOutput, scrub, tail } from '../utils/qwen.js';
 
+/**
+ * Every credential value the child can see: the key from the key file and any key the
+ * server inherited in the variables Qwen Code reads. Removed from all returned text.
+ */
+function secretValues(
+  config: ReturnType<typeof loadConfig>,
+  apiKey: string | undefined
+): string[] {
+  const names = ['OPENAI_API_KEY', 'DASHSCOPE_API_KEY', ...config.apiKeyEnv];
+  const inherited = names.map((name) => process.env[name]?.trim());
+  return [apiKey, ...inherited].filter(
+    (v): v is string => typeof v === 'string' && v.length > 0
+  );
+}
+
+/** Scrub every string in a JSON-shaped value (the result metadata). */
+function scrubDeep<T>(value: T, secrets: string[]): T {
+  if (secrets.length === 0) return value;
+  return JSON.parse(scrub(JSON.stringify(value), secrets)) as T;
+}
+
+/**
+ * Tools a plan-mode call may pre-approve. Qwen Code 0.28 runs an explicitly allowed
+ * tool such as write_file before its plan-mode check, so only shell commands, which
+ * plan mode always checks for being read-only, can be listed.
+ */
+function checkPlanAllowedTools(tools: string[] | undefined): void {
+  const refused = (tools ?? []).filter(
+    (tool) => !/^run_shell_command\(.+\)$/.test(tool.trim())
+  );
+  if (refused.length > 0) {
+    throw new ValidationError(
+      TOOLS.QWEN,
+      `in approval mode "plan", allowedTools may only list shell commands (run_shell_command(...)); refused: ${refused.join(', ')}. Pass approvalMode "default" or "auto-edit" for other tools.`
+    );
+  }
+}
+
 const defaultContext: ToolHandlerContext = {
   sendProgress: async () => {},
 };
@@ -94,10 +132,12 @@ export class QwenToolHandler {
     const { prompt, sessionId, workingDirectory } = args;
     const config = loadConfig();
 
-    if (sessionId && args.resetSession) {
-      this.sessionStorage.delete(sessionId);
-    }
-    const session = sessionId ? this.sessionStorage.get(sessionId) : undefined;
+    // A reset only replaces the mapping once the new run succeeds (recordTurn), so a
+    // failed reset keeps the old conversation reachable.
+    const session =
+      sessionId && !args.resetSession
+        ? this.sessionStorage.get(sessionId)
+        : undefined;
 
     const requestedCwd = workingDirectory
       ? path.resolve(workingDirectory)
@@ -116,6 +156,9 @@ export class QwenToolHandler {
       );
     }
 
+    const approvalMode = args.approvalMode ?? config.approvalMode;
+    if (approvalMode === 'plan') checkPlanAllowedTools(args.allowedTools);
+
     const resume = session !== undefined;
     const qwenSessionId = session?.qwenSessionId ?? randomUUID();
     const model = args.model ?? config.defaultModel;
@@ -123,7 +166,7 @@ export class QwenToolHandler {
     const cmdArgs = buildQwenArgs({
       qwenSessionId,
       resume,
-      approvalMode: args.approvalMode ?? config.approvalMode,
+      approvalMode,
       maxWallTime,
       model,
       authType: config.authType,
@@ -132,7 +175,8 @@ export class QwenToolHandler {
     });
 
     const apiKey = readApiKey(config);
-    const clean = (text: string) => scrub(text, [apiKey]);
+    const secrets = secretValues(config, apiKey);
+    const clean = (text: string) => scrub(text, secrets);
 
     await context.sendProgress('Starting Qwen Code...');
     const startedAt = Date.now();
@@ -164,7 +208,13 @@ export class QwenToolHandler {
 
     const output = parseQwenOutput(result.stdout);
 
-    if (result.code !== 0 || output.isError) {
+    if (
+      result.code !== 0 ||
+      result.aborted ||
+      result.timedOut ||
+      result.overflow ||
+      output.isError
+    ) {
       throw new ToolExecutionError(
         TOOLS.QWEN,
         clean(
@@ -184,18 +234,23 @@ export class QwenToolHandler {
       this.sessionStorage.recordTurn(sessionId, qwenSessionId, cwd);
     }
 
-    const metadata: Record<string, unknown> = {
-      qwenSessionId: output.sessionId ?? qwenSessionId,
-      ...(sessionId && { sessionId }),
-      resumed: resume,
-      workingDirectory: cwd,
-      ...((output.model ?? model) && { model: output.model ?? model }),
-      ...(output.permissionMode && { approvalMode: output.permissionMode }),
-      ...(output.durationMs !== undefined && { durationMs: output.durationMs }),
-      ...(output.numTurns !== undefined && { numTurns: output.numTurns }),
-      ...(output.usage && { usage: output.usage }),
-      ...(!output.parsed && { rawOutput: true }),
-    };
+    const metadata: Record<string, unknown> = scrubDeep(
+      {
+        qwenSessionId: output.sessionId ?? qwenSessionId,
+        ...(sessionId && { sessionId }),
+        resumed: resume,
+        workingDirectory: cwd,
+        ...((output.model ?? model) && { model: output.model ?? model }),
+        ...(output.permissionMode && { approvalMode: output.permissionMode }),
+        ...(output.durationMs !== undefined && {
+          durationMs: output.durationMs,
+        }),
+        ...(output.numTurns !== undefined && { numTurns: output.numTurns }),
+        ...(output.usage && { usage: output.usage }),
+        ...(!output.parsed && { rawOutput: true }),
+      },
+      secrets
+    );
 
     return {
       content: [
@@ -218,6 +273,9 @@ export class QwenToolHandler {
     let summary: string;
     if (result.aborted) {
       summary = 'Qwen Code was stopped because the request was cancelled';
+    } else if (result.overflow) {
+      summary =
+        'Qwen Code produced more output than the server keeps (10 MB per stream); the answer was cut off';
     } else if (result.timedOut) {
       summary = `Qwen Code did not stop at its wall-time budget (${maxWallTime}) and was killed`;
     } else if (result.code === EXIT_BUDGET_EXCEEDED) {
@@ -293,20 +351,27 @@ export class HelpToolHandler {
   ): Promise<ToolResult> {
     try {
       const { command } = HelpToolSchema.parse(args);
-      const { bin } = loadConfig();
+      const config = loadConfig();
+      const { bin } = config;
+      const secrets = secretValues(config, undefined);
       const flag = command === 'version' ? '--version' : '--help';
       const result = await runCommand(bin, [flag], { timeoutMs: 30_000 });
       if (result.code !== 0) {
         throw new ToolExecutionError(
           TOOLS.HELP,
-          `"${bin} ${flag}" exited with code ${result.code}\n${tail(result.stderr)}`
+          scrub(
+            `"${bin} ${flag}" exited with code ${result.code}\n${tail(result.stderr)}`,
+            secrets
+          )
         );
       }
       return {
         content: [
           {
             type: 'text',
-            text: result.stdout.trim() || 'No output from Qwen Code',
+            text:
+              scrub(result.stdout.trim(), secrets) ||
+              'No output from Qwen Code',
           },
         ],
       };
