@@ -88,6 +88,15 @@ test('plan mode may run read-only git and gh pr commands, and nothing else by de
   );
   expect(extra).toContain('run_shell_command(npm test)');
   expect(extra).toContain('run_shell_command(git log)');
+  // plan mode would refuse the extra command, so the run uses default mode
+  const withExtra = buildQwenArgs({
+    ...base,
+    approvalMode: 'plan',
+    allowedTools: ['run_shell_command(npm test)'],
+  });
+  expect(withExtra[withExtra.indexOf('--approval-mode') + 1]).toBe('default');
+  const planOnly = buildQwenArgs({ ...base, approvalMode: 'plan' });
+  expect(planOnly[planOnly.indexOf('--approval-mode') + 1]).toBe('plan');
 });
 
 describe('parseQwenOutput', () => {

@@ -39,12 +39,22 @@ export function buildQwenArgs(input: QwenArgsInput): string[] {
   const args = ['--output-format', 'json'];
   if (input.authType) args.push('--auth-type', input.authType);
   if (input.model) args.push('--model', input.model);
-  args.push('--approval-mode', input.approvalMode);
+  // Plan mode refuses every command Qwen Code cannot classify as read-only, whatever the
+  // allow-list says (tested 2026-11-27: `date` with allowedTools was refused). A plan
+  // call with extra tools therefore runs in `default` mode: nobody can approve an edit
+  // in a headless run, so it still cannot change files, and the shell is limited to the
+  // read-only commands below plus the caller's extra tools.
+  const extra = input.allowedTools ?? [];
+  const mode =
+    input.approvalMode === 'plan' && extra.length > 0
+      ? 'default'
+      : input.approvalMode;
+  args.push('--approval-mode', mode);
   const allowed = [
     ...(input.approvalMode === 'plan'
       ? PLAN_READ_ONLY_COMMANDS.map((c) => `run_shell_command(${c})`)
       : []),
-    ...(input.allowedTools ?? []),
+    ...extra,
   ];
   for (const tool of allowed) args.push('--allowed-tools', tool);
   args.push('--max-wall-time', input.maxWallTime);

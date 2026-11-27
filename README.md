@@ -109,7 +109,12 @@ The result's `_meta` carries `qwenSessionId`, `sessionId`, `resumed`,
 Its only commands are read-only git and GitHub PR reads (`git log`, `show`,
 `diff`, `status`, `blame`, `ls-files`, `branch`, `gh pr view`, `gh pr diff`),
 so it can read a branch or a pull request itself instead of needing a copy of
-the code. These are prefix matches, as Qwen Code checks them. `auto-edit` approves file edits, `auto` lets a classifier
+the code. These are prefix matches, as Qwen Code checks them.
+Plan mode refuses any command Qwen Code cannot classify as read-only, even one
+named in `allowedTools`, so a `plan` call that passes `allowedTools` runs in
+`default` mode instead: the read-only commands plus the extra tools, and no
+file edits, because nobody can approve one in a headless run. The result's
+`_meta.approvalMode` then says `default`. `auto-edit` approves file edits, `auto` lets a classifier
 approve safe actions, and `yolo` approves everything. `default` asks for
 approval, and a headless run has nobody to give it. Raise the mode only for
 work where Qwen Code should change things.
