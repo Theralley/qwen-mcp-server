@@ -13,12 +13,6 @@
   <a href="LICENSE"><img alt="ISC license" src="https://img.shields.io/badge/license-ISC-blue?style=flat-square"></a>
 </p>
 
-<p align="center">
-  <a href="https://www.buymeacoffee.com/theralley">
-    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="48">
-  </a>
-</p>
-
 [Qwen Code](https://github.com/QwenLM/qwen-code) is a coding agent for the terminal, and it has no
 MCP-server mode. This server is the bridge: your agent calls the `qwen` tool, the server runs
 Qwen Code headlessly in the folder you name, and the answer comes back as the tool result. A
@@ -203,7 +197,6 @@ The automated tests use a fake `qwen` and run in CI on Linux and macOS with Node
 
 If it earns its place in your setup:
 
-- [**Buy me a coffee**](https://www.buymeacoffee.com/theralley).
 - **Star the repository**, so others find it.
 - **Tell us what you run it with** in an [issue](https://github.com/Theralley/qwen-mcp-server/issues):
   client, operating system, Qwen Code version, and what worked.
