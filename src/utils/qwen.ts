@@ -35,6 +35,14 @@ export const PLAN_READ_ONLY_COMMANDS = [
  * part of it: it goes to stdin. `--model` is added at most once, because
  * Qwen Code 0.28.0 crashes when it is given twice.
  */
+// The allow-list matches the start of the command, so `git -C <dir> log` is refused
+// while `git log` is allowed. Tell the model; widening the list to `git -C` would
+// also allow `git -C <dir> push`.
+export const PLAN_SHELL_HINT =
+  'Shell commands: run git and gh from the working directory exactly as `git log`, ' +
+  '`git diff`, `gh pr view` and so on. Never use `git -C <dir>`, `cd <dir> &&` or other ' +
+  'prefixes: only commands that start with an allowed read-only command are permitted.';
+
 export function buildQwenArgs(input: QwenArgsInput): string[] {
   const args = ['--output-format', 'json'];
   if (input.authType) args.push('--auth-type', input.authType);
@@ -59,9 +67,11 @@ export function buildQwenArgs(input: QwenArgsInput): string[] {
   for (const tool of allowed) args.push('--allowed-tools', tool);
   args.push('--max-wall-time', input.maxWallTime);
   args.push(input.resume ? '--resume' : '--session-id', input.qwenSessionId);
-  if (input.appendSystemPrompt) {
-    args.push('--append-system-prompt', input.appendSystemPrompt);
-  }
+  const system = [
+    input.approvalMode === 'plan' ? PLAN_SHELL_HINT : '',
+    input.appendSystemPrompt ?? '',
+  ].filter(Boolean);
+  if (system.length) args.push('--append-system-prompt', system.join('\n\n'));
   return args;
 }
 

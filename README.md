@@ -109,7 +109,9 @@ The result's `_meta` carries `qwenSessionId`, `sessionId`, `resumed`,
 Its only commands are read-only git and GitHub PR reads (`git log`, `show`,
 `diff`, `status`, `blame`, `ls-files`, `branch`, `gh pr view`, `gh pr diff`),
 so it can read a branch or a pull request itself instead of needing a copy of
-the code. These are prefix matches, as Qwen Code checks them.
+the code. These are prefix matches, as Qwen Code checks them, so `git -C <dir> log`
+is refused; plan mode therefore adds a system-prompt line telling Qwen to run git
+from the working directory without such prefixes. Set `workingDirectory` to the repo.
 Plan mode refuses any command Qwen Code cannot classify as read-only, even one
 named in `allowedTools`, so a `plan` call that passes `allowedTools` runs in
 `default` mode instead: the read-only commands plus the extra tools, and no

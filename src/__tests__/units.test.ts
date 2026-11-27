@@ -1,7 +1,13 @@
 import { durationToMs, loadConfig } from '../config';
 import { InMemorySessionStorage } from '../session/storage';
 import { runCommand } from '../utils/command';
-import { buildQwenArgs, parseQwenOutput, scrub, tail } from '../utils/qwen';
+import {
+  buildQwenArgs,
+  PLAN_SHELL_HINT,
+  parseQwenOutput,
+  scrub,
+  tail,
+} from '../utils/qwen';
 import { createFakeQwen } from './fake-qwen';
 
 describe('loadConfig', () => {
@@ -97,6 +103,24 @@ test('plan mode may run read-only git and gh pr commands, and nothing else by de
   expect(withExtra[withExtra.indexOf('--approval-mode') + 1]).toBe('default');
   const planOnly = buildQwenArgs({ ...base, approvalMode: 'plan' });
   expect(planOnly[planOnly.indexOf('--approval-mode') + 1]).toBe('plan');
+});
+
+test('plan mode tells the model not to prefix git commands', () => {
+  const base = { qwenSessionId: 'abc', maxWallTime: '15m', resume: false };
+  const prompt = (args: string[]) =>
+    args[args.indexOf('--append-system-prompt') + 1];
+  const plan = buildQwenArgs({ ...base, approvalMode: 'plan' });
+  expect(prompt(plan)).toBe(PLAN_SHELL_HINT);
+  expect(PLAN_SHELL_HINT).toContain('git -C');
+  const both = buildQwenArgs({
+    ...base,
+    approvalMode: 'plan',
+    appendSystemPrompt: 'Be brief.',
+  });
+  expect(prompt(both)).toBe(`${PLAN_SHELL_HINT}\n\nBe brief.`);
+  expect(buildQwenArgs({ ...base, approvalMode: 'yolo' })).not.toContain(
+    '--append-system-prompt'
+  );
 });
 
 describe('parseQwenOutput', () => {
