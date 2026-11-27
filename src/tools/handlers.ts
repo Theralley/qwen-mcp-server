@@ -128,6 +128,7 @@ export class QwenToolHandler {
       model,
       authType: config.authType,
       appendSystemPrompt: args.appendSystemPrompt,
+      allowedTools: args.allowedTools,
     });
 
     const apiKey = readApiKey(config);

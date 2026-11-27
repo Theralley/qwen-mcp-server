@@ -50,11 +50,13 @@ test('buildQwenArgs uses --session-id for a new session and --resume after', () 
     approvalMode: 'plan' as const,
     maxWallTime: '15m',
   };
-  expect(buildQwenArgs({ ...base, resume: false })).toEqual([
+  expect(
+    buildQwenArgs({ ...base, approvalMode: 'yolo', resume: false })
+  ).toEqual([
     '--output-format',
     'json',
     '--approval-mode',
-    'plan',
+    'yolo',
     '--max-wall-time',
     '15m',
     '--session-id',
@@ -64,6 +66,28 @@ test('buildQwenArgs uses --session-id for a new session and --resume after', () 
   expect(resumed).toContain('--resume');
   expect(resumed).not.toContain('--session-id');
   expect(resumed.filter((arg) => arg === '--model')).toHaveLength(1);
+});
+
+test('plan mode may run read-only git and gh pr commands, and nothing else by default', () => {
+  const base = { qwenSessionId: 'abc', maxWallTime: '15m', resume: false };
+  const allowed = (args: string[]) =>
+    args.flatMap((arg, i) => (arg === '--allowed-tools' ? [args[i + 1]] : []));
+  const plan = allowed(buildQwenArgs({ ...base, approvalMode: 'plan' }));
+  expect(plan).toContain('run_shell_command(git diff)');
+  expect(plan).toContain('run_shell_command(gh pr diff)');
+  expect(plan.some((t) => /git (push|commit|checkout|reset)/.test(t))).toBe(
+    false
+  );
+  expect(allowed(buildQwenArgs({ ...base, approvalMode: 'yolo' }))).toEqual([]);
+  const extra = allowed(
+    buildQwenArgs({
+      ...base,
+      approvalMode: 'plan',
+      allowedTools: ['run_shell_command(npm test)'],
+    })
+  );
+  expect(extra).toContain('run_shell_command(npm test)');
+  expect(extra).toContain('run_shell_command(git log)');
 });
 
 describe('parseQwenOutput', () => {

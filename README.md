@@ -99,13 +99,17 @@ Runs Qwen Code on a prompt and returns its final answer.
 | `workingDirectory` | Directory Qwen Code runs in. Defaults to the server's own. |
 | `maxWallTime` | Time budget for this call. |
 | `appendSystemPrompt` | Extra instructions appended to the system prompt. |
+| `allowedTools` | Extra tools to allow without asking, in Qwen Code form, for example `run_shell_command(npm test)`. |
 
 The result's `_meta` carries `qwenSessionId`, `sessionId`, `resumed`,
 `workingDirectory`, `model`, `approvalMode`, `durationMs`, `numTurns` and
 `usage`.
 
-**Approval modes.** `plan` lets Qwen Code read and analyze but not edit files
-or run commands. `auto-edit` approves file edits, `auto` lets a classifier
+**Approval modes.** `plan` lets Qwen Code read and analyze but not edit files.
+Its only commands are read-only git and GitHub PR reads (`git log`, `show`,
+`diff`, `status`, `blame`, `ls-files`, `branch`, `gh pr view`, `gh pr diff`),
+so it can read a branch or a pull request itself instead of needing a copy of
+the code. These are prefix matches, as Qwen Code checks them. `auto-edit` approves file edits, `auto` lets a classifier
 approve safe actions, and `yolo` approves everything. `default` asks for
 approval, and a headless run has nobody to give it. Raise the mode only for
 work where Qwen Code should change things.

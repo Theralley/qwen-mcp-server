@@ -31,7 +31,13 @@ export const toolDefinitions: ToolDefinition[] = [
           type: 'string',
           enum: [...APPROVAL_MODES],
           description:
-            'plan: analyze only, no edits or commands (default). default: edits and commands need approval, and a headless run has nobody to give it. auto-edit: file edits approved. auto: a classifier approves safe actions. yolo: everything approved.',
+            'plan: analyze only, no edits; the only commands are read-only git and gh pr (git log/show/diff/status/blame/ls-files/branch, gh pr view/diff), so it can read a branch or PR itself (default). default: edits and commands need approval, and a headless run has nobody to give it. auto-edit: file edits approved. auto: a classifier approves safe actions. yolo: everything approved.',
+        },
+        allowedTools: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Extra tools to allow without confirmation, in Qwen Code form, e.g. "run_shell_command(npm test)". Added to the read-only git/gh commands of plan mode.',
         },
         workingDirectory: {
           type: 'string',

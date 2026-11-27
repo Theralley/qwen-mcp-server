@@ -9,7 +9,26 @@ export interface QwenArgsInput {
   model?: string;
   authType?: string;
   appendSystemPrompt?: string;
+  /** Extra tools to allow without confirmation, e.g. `run_shell_command(git log)`. */
+  allowedTools?: string[];
 }
+
+/**
+ * Read-only commands a `plan` run may still execute. Plan mode otherwise has no shell, so
+ * Qwen could not read a branch or a PR and the caller had to copy the code into the
+ * working directory first (seen 2026-11-27). Prefix matches, as Qwen Code checks them.
+ */
+export const PLAN_READ_ONLY_COMMANDS = [
+  'git log',
+  'git show',
+  'git diff',
+  'git status',
+  'git blame',
+  'git ls-files',
+  'git branch',
+  'gh pr view',
+  'gh pr diff',
+] as const;
 
 /**
  * Build the Qwen Code command line for one headless run. The prompt is not
@@ -21,6 +40,13 @@ export function buildQwenArgs(input: QwenArgsInput): string[] {
   if (input.authType) args.push('--auth-type', input.authType);
   if (input.model) args.push('--model', input.model);
   args.push('--approval-mode', input.approvalMode);
+  const allowed = [
+    ...(input.approvalMode === 'plan'
+      ? PLAN_READ_ONLY_COMMANDS.map((c) => `run_shell_command(${c})`)
+      : []),
+    ...(input.allowedTools ?? []),
+  ];
+  for (const tool of allowed) args.push('--allowed-tools', tool);
   args.push('--max-wall-time', input.maxWallTime);
   args.push(input.resume ? '--resume' : '--session-id', input.qwenSessionId);
   if (input.appendSystemPrompt) {

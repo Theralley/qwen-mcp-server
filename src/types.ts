@@ -78,6 +78,7 @@ export const QwenToolSchema = z.object({
     })
     .optional(),
   appendSystemPrompt: z.string().min(1).optional(),
+  allowedTools: z.array(z.string().min(1).max(200)).max(20).optional(),
 });
 
 export const PingToolSchema = z.object({
